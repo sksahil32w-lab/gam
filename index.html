@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GTA Web Engine: Cross-Platform</title>
+    <style>
+        /* --- CORE UI --- */
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; user-select: none; -webkit-user-select: none; touch-action: none; }
+        
+        #game-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10;
+            pointer-events: none; display: flex; flex-direction: column; justify-content: space-between;
+        }
+
+        #loading-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; color: #fff; z-index: 20;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            pointer-events: auto; transition: opacity 0.5s;
+        }
+        
+        .loader-spinner {
+            width: 50px; height: 50px; border: 5px solid #333; border-top: 5px solid #ffcc00;
+            border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px;
+        }
+        
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        #start-btn {
+            background: transparent; border: 2px solid #ffcc00; color: #ffcc00;
+            padding: 15px 40px; font-size: 18px; font-weight: bold; letter-spacing: 2px;
+            cursor: pointer; display: none; text-transform: uppercase;
+        }
+        #start-btn:hover { background: #ffcc00; color: #000; }
+
+        #hud-top { padding: 20px; display: flex; justify-content: space-between; width: 100%; box-sizing: border-box; }
+        .stat-box { background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; color: #fff; font-size: 12px; pointer-events: auto; }
+        
+        /* --- MOBILE CONTROLS --- */
+        #mobile-controls {
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; display: none; /* Hidden by default */
+        }
+
+        /* Virtual Joystick */
+        #joystick-zone {
+            position: absolute; bottom: 50px; left: 50px; width: 120px; height: 120px;
+            background: rgba(255, 255, 255, 0.1); border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50%; pointer-events: auto; touch-action: none;
+        }
+        
+        #joystick-knob {
+            position: absolute; top: 50%; left: 50%; width: 50px; height: 50px;
+            background: rgba(255, 204, 0, 0.8); border-radius: 50%;
+            transform: translate(-50%, -50%); pointer-events: none;
+        }
+
+        /* Right Side Actions */
+        #action-buttons {
+            position: absolute; bottom: 40px; right: 40px;
+            display: flex; gap: 20px; pointer-events: auto;
+        }
+
+        .action-btn {
+            width: 70px; height: 70px; border-radius: 50%;
+            background: rgba(0, 0, 0, 0.5); border: 2px solid rgba(255, 255, 255, 0.3);
+            color: white; font-weight: bold; font-size: 14px;
+            display: flex; align-items: center; justify-content: center;
+            touch-action: none; user-select: none;
+        }
+        
+        .action-btn:active { background: rgba(255, 204, 0, 0.6); border-color: #ffcc00; transform: scale(0.95); }
+        #btn-jump { margin-bottom: 20px; } 
+
+        /* Touch Look Zone */
+        #touch-look-zone {
+            position: absolute; top: 0; right: 0; width: 50%; height: 100%;
+            z-index: 5; pointer-events: auto; touch-action: none;
+        }
+        
+        /* PC Instructions */
+        #pc-hints {
+            position: absolute; bottom: 30px; left: 30px;
+            color: rgba(255,255,255,0.7); font-size: 14px;
+            text-shadow: 1px 1px 2px black; display: none;
+        }
+    </style>
+    
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="game-container"></div>
+
+    <div id="ui-layer">
+        <div id="hud-top">
+            <div class="stat-box" id="fps-counter">FPS: 60</div>
+            <div class="stat-box" id="quality-badge">QUALITY: HIGH</div>
+        </div>
+        
+        <div id="pc-hints">
+            <b>WASD</b> Move | <b>SHIFT</b> Sprint | <b>SPACE</b> Jump | <b>DRAG</b> Rotate Cam
+        </div>
+
+        <div id="mobile-controls">
+            <div id="joystick-zone"><div id="joystick-knob"></div></div>
+            <div id="touch-look-zone"></div> <div id="action-buttons">
+                <div class="action-btn" id="btn-sprint">RUN</div>
+                <div class="action-btn" id="btn-jump">JUMP</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading-screen">
+        <div class="loader-spinner" id="spinner"></div>
+        <div id="loading-text">INITIALIZING ENGINE...</div>
+        <button id="start-btn">ENTER WORLD</button>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+        import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+        import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
+        import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+        // --- 1. SYSTEM CONFIGURATION ---
+        const DEVICE = {
+            isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
+            width: window.innerWidth,
+            height: window.innerHeight,
+            pixelRatio: Math.min(window.devicePixelRatio, 2)
+        };
+
+        const SETTINGS = {
+            shadowSize: DEVICE.isMobile ? 1024 : 4096,
+            bloom: !DEVICE.isMobile, // Disable bloom on mobile by default for thermal safety
+            fxaa: !DEVICE.isMobile,
+            pixelRatio: DEVICE.isMobile ? 1 : DEVICE.pixelRatio // Force 1x on mobile to prevent overheating
+        };
+
+        const PHYSICS = {
+            walkSpeed: 300, runSpeed: 700, gravity: -1800, jumpForce: 650, 
+            rotSpeed: 8, camDist: 350, camSensX: 0.003, camSensY: 0.003
+        };
+
+        // --- 2. GLOBALS ---
+        let scene, camera, renderer, composer, clock;
+        let character, mixer, actions = {}, activeAction;
+        let isGameReady = false;
+        
+        // Input State (Unified)
+        const input = {
+            x: 0, y: 0, // Movement Vector (-1 to 1)
+            run: false,
+            jump: false,
+            lookDelta: { x: 0, y: 0 }
+        };
+
+        // Camera State
+        const camState = { angleX: 0, angleY: Math.PI / 8 };
+        
+        // Performance Monitoring
+        let frameCount = 0;
+        let lastTime = performance.now();
+        let isLowQualityMode = false;
+
+        // Sounds
+        let listener;
+        const sounds = { walk: null, run: null, jump: null, land: null };
+        const playerState = { velocity: new THREE.Vector3(), onGround: false, isJumping: false };
+
+        // --- 3. INITIALIZATION ---
+        init();
+
+        function init() {
+            // Setup UI based on device
+            if (DEVICE.isMobile) {
+                document.getElementById('mobile-controls').style.display = 'block';
+                document.getElementById('quality-badge').innerText = "QUALITY: MOBILE (Optimized)";
+                setupMobileControls();
+            } else {
+                document.getElementById('pc-hints').style.display = 'block';
+                setupPCControls();
+            }
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ 
+                antialias: false, // We use FXAA or none
+                powerPreference: "high-performance",
+                precision: DEVICE.isMobile ? "mediump" : "highp"
+            });
+            renderer.setSize(DEVICE.width, DEVICE.height);
+            renderer.setPixelRatio(SETTINGS.pixelRatio);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = DEVICE.isMobile ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap; // Faster shadows on mobile
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.0;
+            document.getElementById('game-container').appendChild(renderer.domElement);
+
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB);
+            scene.fog = new THREE.FogExp2(0x87CEEB, 0.00025);
+            clock = new THREE.Clock();
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(60, DEVICE.width / DEVICE.height, 1, 8000);
+
+            // Lighting
+            const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
+            scene.add(hemiLight);
+
+            const sunLight = new THREE.DirectionalLight(0xfff0dd, 3.5);
+            sunLight.position.set(-100, 500, 200);
+            sunLight.castShadow = true;
+            sunLight.shadow.mapSize.width = SETTINGS.shadowSize;
+            sunLight.shadow.mapSize.height = SETTINGS.shadowSize;
+            sunLight.shadow.bias = -0.0001;
+            // Limit shadow distance on mobile
+            sunLight.shadow.camera.far = DEVICE.isMobile ? 1500 : 3000;
+            scene.add(sunLight);
+
+            // Environment
+            const pmremGenerator = new THREE.PMREMGenerator(renderer);
+            scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+
+            // Ground
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.8, metalness: 0.2 });
+            const ground = new THREE.Mesh(new THREE.PlaneGeometry(10000, 10000), groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+            scene.add(new THREE.GridHelper(10000, 100, 0x555555, 0x222222));
+
+            setupPostProcessing();
+            setupAudio();
+            
+            // Start Loading
+            loadAssets();
+            
+            window.addEventListener('resize', onWindowResize);
+            animate();
+        }
+
+        // --- 4. POST PROCESSING & ADAPTIVE GRAPHICS ---
+        function setupPostProcessing() {
+            if (!SETTINGS.bloom && !SETTINGS.fxaa) return; // Skip if low end
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(new RenderPass(scene, camera));
+
+            if (SETTINGS.bloom) {
+                const bloomPass = new UnrealBloomPass(new THREE.Vector2(DEVICE.width, DEVICE.height), 1.5, 0.4, 0.85);
+                bloomPass.threshold = 0.8;
+                bloomPass.strength = 0.35;
+                bloomPass.radius = 0.5;
+                composer.addPass(bloomPass);
+            }
+
+            const outputPass = new OutputPass();
+            composer.addPass(outputPass);
+
+            if (SETTINGS.fxaa) {
+                const fxaaPass = new ShaderPass(FXAAShader);
+                const pixelRatio = renderer.getPixelRatio();
+                fxaaPass.material.uniforms['resolution'].value.x = 1 / (DEVICE.width * pixelRatio);
+                fxaaPass.material.uniforms['resolution'].value.y = 1 / (DEVICE.height * pixelRatio);
+                composer.addPass(fxaaPass);
+            }
+        }
+
+        function checkPerformance() {
+            frameCount++;
+            const currentTime = performance.now();
+            if (currentTime - lastTime >= 1000) {
+                const fps = frameCount;
+                document.getElementById('fps-counter').innerText = `FPS: ${fps}`;
+                
+                // Downgrade if FPS is consistently bad (< 30) and we haven't already
+                if (fps < 30 && !isLowQualityMode && !DEVICE.isMobile) {
+                    console.warn("Low FPS detected. Downgrading graphics...");
+                    isLowQualityMode = true;
+                    SETTINGS.bloom = false;
+                    SETTINGS.fxaa = false;
+                    composer = null; // Disable post-processing
+                    document.getElementById('quality-badge').innerText = "QUALITY: LOW (Auto-Adjusted)";
+                }
+                
+                frameCount = 0;
+                lastTime = currentTime;
+            }
+        }
+
+        // --- 5. INPUT SYSTEMS (PC & MOBILE) ---
+        
+        function setupPCControls() {
+            // Keyboard
+            const keys = {};
+            document.addEventListener('keydown', e => {
+                keys[e.code] = true;
+                updatePCInput(keys);
+            });
+            document.addEventListener('keyup', e => {
+                keys[e.code] = false;
+                updatePCInput(keys);
+            });
+
+            // Mouse Drag Camera
+            let isDragging = false;
+            document.addEventListener('mousedown', () => isDragging = true);
+            document.addEventListener('mouseup', () => isDragging = false);
+            document.addEventListener('mousemove', e => {
+                if(isDragging) {
+                    input.lookDelta.x = -e.movementX * PHYSICS.camSensX;
+                    input.lookDelta.y = -e.movementY * PHYSICS.camSensY;
+                }
+            });
+        }
+
+        function updatePCInput(keys) {
+            input.y = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
+            input.x = (keys['KeyA'] ? 1 : 0) - (keys['KeyD'] ? 1 : 0);
+            input.run = keys['ShiftLeft'];
+            input.jump = keys['Space'];
+        }
+
+        function setupMobileControls() {
+            // 1. Virtual Joystick
+            const zone = document.getElementById('joystick-zone');
+            const knob = document.getElementById('joystick-knob');
+            const maxRadius = 35; // Movement radius
+            let joystickId = null;
+            let startX, startY;
+
+            zone.addEventListener('touchstart', e => {
+                e.preventDefault();
+                const touch = e.changedTouches[0];
+                joystickId = touch.identifier;
+                startX = touch.clientX;
+                startY = touch.clientY;
+                
+                // Unlock Audio on first touch
+                if (listener && listener.context.state === 'suspended') listener.context.resume();
+            }, {passive: false});
+
+            zone.addEventListener('touchmove', e => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    if (e.changedTouches[i].identifier === joystickId) {
+                        const touch = e.changedTouches[i];
+                        let dx = touch.clientX - startX;
+                        let dy = touch.clientY - startY;
+                        
+                        // Clamp
+                        const distance = Math.sqrt(dx*dx + dy*dy);
+                        if (distance > maxRadius) {
+                            const ratio = maxRadius / distance;
+                            dx *= ratio;
+                            dy *= ratio;
+                        }
+
+                        // Visual Update
+                        knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+
+                        // Logic Update (Normalized -1 to 1)
+                        // Invert X because in our 3D logic A (left) is positive logic depending on rotation
+                        // Actually: W is forward (positive Z relative to cam), S back. 
+                        // Let's standardise: Forward = +1 Y input, Right = +1 X input
+                        input.y = -dy / maxRadius; 
+                        input.x = -dx / maxRadius; 
+                    }
+                }
+            }, {passive: false});
+
+            const endJoystick = (e) => {
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    if (e.changedTouches[i].identifier === joystickId) {
+                        joystickId = null;
+                        knob.style.transform = `translate(-50%, -50%)`;
+                        input.x = 0;
+                        input.y = 0;
+                    }
+                }
+            };
+            zone.addEventListener('touchend', endJoystick);
+            zone.addEventListener('touchcancel', endJoystick);
+
+            // 2. Camera Touch Swipe (Right Side)
+            const lookZone = document.getElementById('touch-look-zone');
+            let lookId = null;
+            let lastLookX, lastLookY;
+
+            lookZone.addEventListener('touchstart', e => {
+                e.preventDefault();
+                const touch = e.changedTouches[0];
+                lookId = touch.identifier;
+                lastLookX = touch.clientX;
+                lastLookY = touch.clientY;
+            }, {passive: false});
+
+            lookZone.addEventListener('touchmove', e => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    if (e.changedTouches[i].identifier === lookId) {
+                        const touch = e.changedTouches[i];
+                        const dx = touch.clientX - lastLookX;
+                        const dy = touch.clientY - lastLookY;
+                        
+                        input.lookDelta.x = -dx * (PHYSICS.camSensX * 1.5); // Slightly faster on mobile
+                        input.lookDelta.y = -dy * (PHYSICS.camSensY * 1.5);
+
+                        lastLookX = touch.clientX;
+                        lastLookY = touch.clientY;
+                    }
+                }
+            }, {passive: false});
+
+            const endLook = (e) => {
+                for (let i=0; i<e.changedTouches.length; i++) {
+                    if (e.changedTouches[i].identifier === lookId) lookId = null;
+                }
+            }
+            lookZone.addEventListener('touchend', endLook);
+
+            // 3. Buttons
+            const btnSprint = document.getElementById('btn-sprint');
+            const btnJump = document.getElementById('btn-jump');
+
+            btnSprint.addEventListener('touchstart', (e) => { e.preventDefault(); input.run = true; btnSprint.style.background = "#ffcc00"; });
+            btnSprint.addEventListener('touchend', (e) => { e.preventDefault(); input.run = false; btnSprint.style.background = "rgba(0,0,0,0.5)"; });
+            
+            btnJump.addEventListener('touchstart', (e) => { e.preventDefault(); input.jump = true; btnJump.style.background = "#ffcc00"; });
+            btnJump.addEventListener('touchend', (e) => { e.preventDefault(); input.jump = false; btnJump.style.background = "rgba(0,0,0,0.5)"; });
+        }
+
+        // --- 6. AUDIO SYSTEM ---
+        function setupAudio() {
+            listener = new THREE.AudioListener();
+            camera.add(listener);
+            const audioLoader = new THREE.AudioLoader();
+
+            const loadSound = (name, file, loop, vol) => {
+                const sound = new THREE.Audio(listener);
+                audioLoader.load(file, (buffer) => {
+                    sound.setBuffer(buffer);
+                    sound.setLoop(loop);
+                    sound.setVolume(vol);
+                    sounds[name] = sound;
+                }, undefined, () => console.warn(`Placeholder: Missing ${file}`));
+            };
+
+            loadSound('walk', 'walk.mp3', true, 0.5);
+            loadSound('run', 'run.mp3', true, 0.8);
+            loadSound('jump', 'jump.mp3', false, 1.0);
+            loadSound('land', 'land.mp3', false, 1.0);
+        }
+
+        // --- 7. ASSET LOADING ---
+        async function loadAssets() {
+            const loader = new FBXLoader();
+            const startBtn = document.getElementById('start-btn');
+            const spinner = document.getElementById('spinner');
+            const loadingText = document.getElementById('loading-text');
+
+            try {
+                // Load Model
+                character = await loader.loadAsync('character.fbx');
+                
+                // Optimized Material
+                character.traverse(c => {
+                    if (c.isMesh) {
+                        c.castShadow = true;
+                        c.receiveShadow = true;
+                        if (c.material) {
+                            c.material = new THREE.MeshStandardMaterial({
+                                color: c.material.color,
+                                map: c.material.map,
+                                roughness: 0.7,
+                                metalness: 0.1
+                            });
+                        }
+                    }
+                });
+
+                // Scale Logic
+                const box = new THREE.Box3().setFromObject(character);
+                const size = box.getSize(new THREE.Vector3());
+                if (size.y > 0) character.scale.setScalar(175 / size.y);
+                scene.add(character);
+
+                // Animations
+                mixer = new THREE.AnimationMixer(character);
+                const loadAnim = async (name, file) => {
+                    const obj = await loader.loadAsync(file);
+                    const action = mixer.clipAction(obj.animations[0]);
+                    actions[name] = action;
+                    if(name === 'jump') { action.setLoop(THREE.LoopOnce); action.clampWhenFinished = true; }
+                };
+
+                await Promise.all([
+                    loadAnim('idle', 'idle.fbx'), loadAnim('walk', 'walk.fbx'),
+                    loadAnim('run', 'run.fbx'), loadAnim('jump', 'jump.fbx')
+                ]);
+
+                activeAction = actions['idle'];
+                activeAction.play();
+
+                mixer.addEventListener('finished', (e) => {
+                    if(e.action === actions['jump']) playerState.isJumping = false;
+                });
+
+                // UI Ready
+                spinner.style.display = 'none';
+                loadingText.style.display = 'none';
+                startBtn.style.display = 'block';
+
+                startBtn.addEventListener('click', () => {
+                    document.getElementById('loading-screen').style.opacity = 0;
+                    setTimeout(() => document.getElementById('loading-screen').remove(), 500);
+                    isGameReady = true;
+                    // Resume audio on start click
+                    if (listener && listener.context.state === 'suspended') listener.context.resume();
+                });
+
+            } catch (err) {
+                console.error(err);
+                loadingText.innerText = "ASSET LOAD ERROR. CHECK CONSOLE.";
+                loadingText.style.color = "red";
+            }
+        }
+
+        // --- 8. GAME LOOP & PHYSICS ---
+        function updatePhysics(dt) {
+            if (!character) return;
+
+            // Apply Camera Rotation
+            camState.angleX += input.lookDelta.x;
+            camState.angleY += input.lookDelta.y;
+            camState.angleY = Math.max(0.1, Math.min(Math.PI / 2.2, camState.angleY));
+            
+            // Reset Delta (so it doesn't spin forever)
+            input.lookDelta.x = 0;
+            input.lookDelta.y = 0;
+
+            // Movement Calculation
+            const speed = input.run ? PHYSICS.runSpeed : PHYSICS.walkSpeed;
+            
+            // Calculate direction relative to camera
+            // Camera Forward vector (projected on XZ plane)
+            const forwardX = -Math.sin(camState.angleX);
+            const forwardZ = -Math.cos(camState.angleX);
+            const rightX = Math.cos(camState.angleX);
+            const rightZ = -Math.sin(camState.angleX);
+
+            let moveX = (forwardX * input.y) + (rightX * input.x); // NOTE: input.x is actually "side" input
+            let moveZ = (forwardZ * input.y) + (rightZ * input.x);
+
+            const moveDir = new THREE.Vector3(moveX, 0, moveZ);
+            const isMoving = (Math.abs(input.x) > 0.1 || Math.abs(input.y) > 0.1);
+
+            // Audio & Anim Logic
+            if (playerState.onGround && !playerState.isJumping) {
+                if (isMoving) {
+                    if (input.run) {
+                        if (sounds.walk?.isPlaying) sounds.walk.stop();
+                        if (sounds.run && !sounds.run.isPlaying) sounds.run.play();
+                    } else {
+                        if (sounds.run?.isPlaying) sounds.run.stop();
+                        if (sounds.walk && !sounds.walk.isPlaying) sounds.walk.play();
+                    }
+                } else {
+                    if (sounds.walk?.isPlaying) sounds.walk.stop();
+                    if (sounds.run?.isPlaying) sounds.run.stop();
+                }
+            }
+
+            if (isMoving) {
+                moveDir.normalize();
+                character.position.addScaledVector(moveDir, speed * dt);
+                
+                // Character Rotation
+                const targetRot = Math.atan2(moveDir.x, moveDir.z);
+                let rotDiff = targetRot - character.rotation.y;
+                while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
+                while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+                character.rotation.y += rotDiff * PHYSICS.rotSpeed * dt;
+
+                if (!playerState.isJumping && playerState.onGround) fadeToAction(input.run ? 'run' : 'walk', 0.2);
+            } else {
+                if (!playerState.isJumping && playerState.onGround) fadeToAction('idle', 0.2);
+            }
+
+            // Jump
+            if (input.jump && playerState.onGround && !playerState.isJumping) {
+                playerState.velocity.y = PHYSICS.jumpForce;
+                playerState.onGround = false;
+                playerState.isJumping = true;
+                if (sounds.jump) { sounds.jump.stop(); sounds.jump.play(); }
+                fadeToAction('jump', 0.1);
+            }
+
+            // Gravity
+            playerState.velocity.y += PHYSICS.gravity * dt;
+            character.position.y += playerState.velocity.y * dt;
+
+            // Floor Collision
+            if (character.position.y < 0) {
+                character.position.y = 0;
+                playerState.velocity.y = 0;
+                if (!playerState.onGround && sounds.land) sounds.land.play();
+                playerState.onGround = true;
+            }
+        }
+
+        function updateCamera() {
+            if (!character) return;
+            const hDist = PHYSICS.camDist * Math.cos(camState.angleY);
+            const vDist = PHYSICS.camDist * Math.sin(camState.angleY);
+            
+            const targetPos = new THREE.Vector3(
+                character.position.x + Math.sin(camState.angleX) * hDist,
+                character.position.y + vDist,
+                character.position.z + Math.cos(camState.angleX) * hDist
+            );
+            
+            camera.position.lerp(targetPos, 0.1); // Smooth follow
+            camera.lookAt(character.position.x, character.position.y + 120, character.position.z);
+        }
+
+        function fadeToAction(name, duration) {
+            if (activeAction === actions[name]) return;
+            const prev = activeAction;
+            activeAction = actions[name];
+            if (prev) prev.fadeOut(duration);
+            activeAction.reset().fadeIn(duration).play();
+        }
+
+        function onWindowResize() {
+            DEVICE.width = window.innerWidth;
+            DEVICE.height = window.innerHeight;
+            camera.aspect = DEVICE.width / DEVICE.height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(DEVICE.width, DEVICE.height);
+            if(composer) composer.setSize(DEVICE.width, DEVICE.height);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            checkPerformance();
+            
+            if (!isGameReady) return;
+            
+            const dt = Math.min(clock.getDelta(), 0.1);
+            if (mixer) mixer.update(dt);
+            
+            updatePhysics(dt);
+            updateCamera();
+
+            if (composer) {
+                composer.render();
+            } else {
+                renderer.render(scene, camera);
+            }
+        }
+    </script>
+</body>
+</html>
